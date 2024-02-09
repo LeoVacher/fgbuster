@@ -39,8 +39,10 @@ __all__ = [
     'CMB',
     'ThermalSZ',
     'Dust',
+    'Dustmom',
     'Synchrotron',
     'ModifiedBlackBody',
+    'MomentsMBB',
     'PowerLaw',
     'FreeFree',
 ]
@@ -403,6 +405,75 @@ class ModifiedBlackBody(AnalyticComponent):
         self._set_default_of_free_symbols(
             beta_d=self._REF_BETA, temp=self._REF_TEMP)
 
+def get_mom_function(border,torder):
+
+    beta = sympy.Symbol('beta_d')
+    T = sympy.Symbol('temp')
+    nu = sympy.Symbol('nu')
+    nu0 = sympy.Symbol('nu0')
+    Bval = 2*constants.h*(1e9*nu**3)/constants.c**2
+    Cval = constants.h*1e9*nu/constants.k
+    Bval0 = 2*constants.h*(1e9*nu0**3)/constants.c**2
+    Cval0 = constants.h*1e9*nu0/constants.k
+    Bvalratio = Bval/Bval0
+    mbb = ((nu / nu0) ** beta) * Bvalratio / (sympy.exp(Cval / T) - 1) * (sympy.exp(Cval0 / T) - 1)
+    analyticalmom = sympy.diff(mbb,beta,border)*sympy.diff(mbb,T,torder).factor()/mbb**2/np.math.factorial(border)/np.math.factorial(torder)
+    return '('+str(analyticalmom)+')'
+
+class MomentsMBB(AnalyticComponent):
+    """ Modified Black body
+
+    Parameters
+    ----------
+    nu0: float
+        Reference frequency
+    temp: float
+        Black body temperature
+    beta_d: float
+        Spectral index
+    units:
+        Output units (K_CMB and K_RJ available)
+    """
+
+    _REF_BETA = 1.54
+    _REF_TEMP = 20.
+    _REF_w1b = 0.
+    _REF_w2b = 0.
+
+    def __init__(self, nu0, temp=None, beta_d=None, border=None, torder=None, w1b=None,w2b=None, units='K_CMB'):
+        # Prepare the analytic expression
+        # Note: beta_d (not beta) avoids collision with sympy beta functions
+        #TODO: Use expm1 and get Sympy processing it as a symbol
+        analytic_expr = ('(exp(nu0 / temp * h_over_k) -1)'
+                         '/ (exp(nu / temp * h_over_k) - 1)'
+                         '* (nu / nu0)**(1 + beta_d)')
+        analytic_expr = analytic_expr+'*(1'
+
+        for i in range(border):
+            analytic_expr =analytic_expr+'+w%sb*'%(i+1)+get_mom_function(i+1,0)
+        for j in range(torder):
+            analytic_expr =analytic_expr+'+w%sb*'%(j+1)+get_mom_function(0,j+1)                
+        analytic_expr = analytic_expr+')'
+
+        if 'K_CMB' in units:
+            analytic_expr += ' * ' + K_RJ2K_CMB_NU0
+        elif 'K_RJ' in units:
+            pass
+        else:
+            raise ValueError("Unsupported units: %s"%units)
+
+        # Parameters in the analytic expression are
+        # - Fixed parameters -> into kwargs
+        # - Free parameters -> renamed according to the param_* convention
+        kwargs = {
+            'nu0': nu0, 'beta_d': beta_d, 'temp': temp, 'h_over_k': H_OVER_K, 'w1b': w1b, 'w2b': w2b
+        }
+
+        super(MomentsMBB, self).__init__(analytic_expr, **kwargs)
+
+        self._set_default_of_free_symbols(
+            beta_d=self._REF_BETA, temp=self._REF_TEMP, w1b=self._REF_w1b, w2b=self._REF_w2b)
+
 
 class PowerLaw(AnalyticComponent):
     """ Power law
@@ -553,6 +624,10 @@ class Dust(ModifiedBlackBody):
     """
     pass
 
+class Dustmom(MomentsMBB):
+    """ Alias of :class:`MomentsMBB`
+    """
+    pass
 
 class Synchrotron(PowerLaw):
     """ Alias of :class:`PowerLaw`
